@@ -1,9 +1,8 @@
 package smpp
 
 import (
+	"context"
 	"fmt"
-	"log"
-	"strings"
 	"sync"
 
 	"github.com/linxGnu/gosmpp/data"
@@ -12,7 +11,7 @@ import (
 
 type SMPPHandler struct {
 	config     Config
-	sessionPoo *sessionPool
+	sessionPool *sessionPool
 }
 
 func NewSMPPHandler() (*SMPPHandler, error) {
@@ -23,72 +22,36 @@ func NewSMPPHandler() (*SMPPHandler, error) {
 		return nil, err
 	}
 
-	pool, err := getSessionPool(10, config)
+	pool, err := getSessionPool(3, config)
 	if err != nil {
 		return nil, err
 	}
 
 	return &SMPPHandler{
 		config:     config,
-		sessionPoo: pool,
+		sessionPool: pool,
 	}, nil
 }
 
-func (h *SMPPHandler) SendAndReceiveSMS(wg *sync.WaitGroup) {
-	defer wg.Done()
+func (h *SMPPHandler) SendAndReceiveSMS(ctx context.Context, wg *sync.WaitGroup) {
+    defer wg.Done()
 
-	// sending SMS(s)
-	for i := 0; i < 1800; i++ {
-		msg := fmt.Sprintf("MSG %d", i)
-		if err := h.sessionPoo.submitSMSToPool(msg); err != nil {
-			fmt.Println(err)
-		}
-	}
+    for i := 0; i < 1800; {
+        select {
+        case <-ctx.Done():
+            fmt.Println("Context canceled, stopping SMS sending...")
+            return // Exit the loop on context cancellation
+        default:
+            msg := fmt.Sprintf("MSG %d", i)
+            if err := h.sessionPool.submitSMSToPool(msg); err != nil {
+                fmt.Println(err)
+            }
+            i++
+        }
+    }
 }
 
-func (h *SMPPHandler) handlePDU() func(pdu.PDU, bool) {
-	concatenated := map[uint8][]string{}
-	return func(p pdu.PDU, _ bool) {
-		switch pd := p.(type) {
-		case *pdu.SubmitSMResp:
-			fmt.Printf("SubmitSMResp:")
 
-		case *pdu.GenericNack:
-			fmt.Println("GenericNack Received")
-
-		case *pdu.EnquireLinkResp:
-			fmt.Println("EnquireLinkResp Received")
-
-		case *pdu.DataSM:
-			fmt.Printf("DataSM:")
-
-		case *pdu.DeliverSM:
-			fmt.Printf("DeliverSM:")
-			// log.Println(pd.Message.GetMessage())
-			// region concatenated sms (sample code)
-			message, err := pd.Message.GetMessage()
-			if err != nil {
-				log.Fatal(err)
-			}
-			totalParts, sequence, reference, found := pd.Message.UDH().GetConcatInfo()
-			if found {
-				if _, ok := concatenated[reference]; !ok {
-					concatenated[reference] = make([]string, totalParts)
-				}
-				concatenated[reference][sequence-1] = message
-			}
-			if !found {
-				log.Println(message)
-			} else if parts, ok := concatenated[reference]; ok && isConcatenatedDone(parts, totalParts) {
-				fmt.Println(strings.Join(parts, ""))
-				// print byte reference
-				// fmt.Println("reference: %s", string(reference))
-				delete(concatenated, reference)
-			}
-			// endregion
-		}
-	}
-}
 
 func (h *SMPPHandler) newSubmitSM(msg string) *pdu.SubmitSM {
 	// build up submitSM
@@ -121,4 +84,10 @@ func isConcatenatedDone(parts []string, total byte) bool {
 		}
 	}
 	return total == 0
+}
+
+// func Close
+
+func (h *SMPPHandler) Close() {
+	h.sessionPool.Close()
 }

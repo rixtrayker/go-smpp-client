@@ -155,3 +155,10 @@ func (p *sessionPool) handlePDU() func(pdu.PDU, bool) {
 		}
 	}
 }
+
+// func Close
+func (p *sessionPool) Close() {
+	for _, session := range p.sessions {
+		session.Close()
+	}
+}
