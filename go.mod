@@ -1,4 +1,4 @@
-module github.com/rixtrayker/go-smpp
+module github.com/rixtrayker/go-smpp-client
 
 go 1.22.1
 
