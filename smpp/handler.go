@@ -3,15 +3,13 @@ package smpp
 import (
 	"context"
 	"fmt"
-	"sync"
-	"time"
 
 	"github.com/linxGnu/gosmpp/data"
 	"github.com/linxGnu/gosmpp/pdu"
 )
 
 type ISMPPHandler interface {
-	SendAndReceiveSMS(ctx context.Context, wg *sync.WaitGroup)
+	SendSMS(ctx context.Context, msg string) error
 	NewSubmitSM(msg string) *pdu.SubmitSM
 	Close()
 }
@@ -30,31 +28,16 @@ func NewSMPPHandler(config Config, session Session, rateLimiter *RateLimiter) IS
 	}
 }
 
-func (h *SMPPHandler) SendAndReceiveSMS(ctx context.Context, wg *sync.WaitGroup) {
-	defer wg.Done()
-	for i := 0; i < 1800; i++ {
-		msg := fmt.Sprintf("MSG %d", i)
-		submitSM := h.NewSubmitSM(msg)
+func (h *SMPPHandler) SendSMS(ctx context.Context, msg string) error {
+	submitSM := h.NewSubmitSM(msg)
 
-		if s, ok := h.session.(*SingleSession); ok {
-			if !h.rateLimiter.Allow(s) {
-				fmt.Println("Rate limit exceeded, waiting...")
-				time.Sleep(time.Second) // or handle rate limit more gracefully
-				continue
-			}
-		}
-
-		if err := h.session.SubmitSM(submitSM); err != nil {
-			fmt.Println("Error submitting SMS:", err)
-		}
-
-		select {
-		case <-ctx.Done():
-			fmt.Println("Context canceled, shutting down...")
-			return
-		default:
+	if s, ok := h.session.(*SingleSession); ok {
+		if !h.rateLimiter.Allow(s) {
+			return fmt.Errorf("rate limit exceeded, try again later")
 		}
 	}
+
+	return h.session.SubmitSM(submitSM)
 }
 
 func (h *SMPPHandler) NewSubmitSM(msg string) *pdu.SubmitSM {

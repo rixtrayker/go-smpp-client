@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/rixtrayker/go-smpp-client/smpp"
 )
@@ -31,17 +32,43 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
-	wg.Add(1)
-
-	go handler.SendAndReceiveSMS(ctx, &wg)
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
-	<-sigs
-	cancel()
-	wg.Wait()
+	go func() {
+		<-sigs
+		cancel()
+		wg.Wait()
+		handler.Close()
+		fmt.Println("Shutting down...")
+		os.Exit(0)
+	}()
 
-	handler.Close()
-	fmt.Println("Shutting down...")
+	// Call a function to test sending SMS
+	testSendSMS(ctx, handler, &wg)
+
+	wg.Wait()
+}
+
+func testSendSMS(ctx context.Context, handler smpp.ISMPPHandler, wg *sync.WaitGroup) {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1800; i++ {
+			msg := fmt.Sprintf("MSG %d", i)
+			err := handler.SendSMS(ctx, msg)
+			if err != nil {
+				fmt.Println("Error sending SMS:", err)
+			}
+
+			select {
+			case <-ctx.Done():
+				fmt.Println("Context canceled, stopping SMS sending...")
+				return
+			default:
+				time.Sleep(100 * time.Millisecond) // simulate some delay between messages
+			}
+		}
+	}()
 }
