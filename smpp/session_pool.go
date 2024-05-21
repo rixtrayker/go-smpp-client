@@ -10,8 +10,14 @@ import (
 )
 
 const maxOutstandingRequests = 100
+// ISessionPool defines the interface for the session pool
+type ISessionPool interface {
+	SubmitSMSToPool(msg string) error
+	Close()
+}
 
-type sessionPool struct {
+// SessionPool implements ISessionPool
+type SessionPool struct {
 	config         Config
 	sessions       []*gosmpp.Session
 	mutex          sync.Mutex
@@ -19,8 +25,8 @@ type sessionPool struct {
 	waitBlockingCh chan struct{}
 }
 
-func getSessionPool(maxSessions int, config Config) (*sessionPool, error) {
-	pool := &sessionPool{
+func NewSessionPool(config Config, maxSessions int) (ISessionPool, error) {
+	pool := &SessionPool{
 		config:         config,
 		sessions:       make([]*gosmpp.Session, 0, maxSessions),
 		submitRespCh:   make(chan struct{}, maxOutstandingRequests),
@@ -38,7 +44,7 @@ func getSessionPool(maxSessions int, config Config) (*sessionPool, error) {
 	return pool, nil
 }
 
-func (p *sessionPool) getSession() *gosmpp.Session {
+func (p *SessionPool) getSession() *gosmpp.Session {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -51,14 +57,14 @@ func (p *sessionPool) getSession() *gosmpp.Session {
 	return session
 }
 
-func (p *sessionPool) returnSession(session *gosmpp.Session) {
+func (p *SessionPool) returnSession(session *gosmpp.Session) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
 	p.sessions = append(p.sessions, session)
 }
 
-func (p *sessionPool) submitSMSToPool(msg string) error {
+func (p *SessionPool) SubmitSMSToPool(msg string) error {
 	p.mutex.Lock()
 	if len(p.sessions) == 0 {
 		p.mutex.Unlock()
@@ -73,7 +79,7 @@ func (p *sessionPool) submitSMSToPool(msg string) error {
 		p.returnSession(session)
 	}()
 
-	handler, _ := NewSMPPHandler()
+	handler := NewSMPPHandler(p.config, p)
 	submitSM := handler.newSubmitSM(msg)
 
 	if len(p.submitRespCh) == maxOutstandingRequests {
@@ -90,7 +96,7 @@ func (p *sessionPool) submitSMSToPool(msg string) error {
 	return nil
 }
 
-func (p *sessionPool) createSession() (*gosmpp.Session, error) {
+func (p *SessionPool) createSession() (*gosmpp.Session, error) {
 	auth := gosmpp.Auth{
 		SMSC:       fmt.Sprintf("%s:%d", p.config.SMSCHost, p.config.SMSCPort),
 		SystemID:   p.config.SystemID,
@@ -125,7 +131,7 @@ func (p *sessionPool) createSession() (*gosmpp.Session, error) {
 	return trans, nil
 }
 
-func (p *sessionPool) handlePDU() func(pdu.PDU, bool) {
+func (p *SessionPool) handlePDU() func(pdu.PDU, bool) {
 	return func(pd pdu.PDU, _ bool) {
 		switch pd.(type) {
 		case *pdu.SubmitSMResp:
@@ -145,7 +151,7 @@ func (p *sessionPool) handlePDU() func(pdu.PDU, bool) {
 }
 
 // Close closes all sessions in the pool.
-func (p *sessionPool) Close() {
+func (p *SessionPool) Close() {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	for _, session := range p.sessions {

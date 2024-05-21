@@ -9,34 +9,33 @@ import (
 	"github.com/linxGnu/gosmpp/pdu"
 )
 
+// ISMPPHandler defines the interface for the SMPP handler.
+type ISMPPHandler interface {
+	SendAndReceiveSMS(ctx context.Context, wg *sync.WaitGroup)
+	NewSubmitSM(msg string) *pdu.SubmitSM
+	Close()
+}
+
+// SMPPHandler implements ISMPPHandler
 type SMPPHandler struct {
 	config      Config
-	sessionPool *sessionPool
+	sessionPool ISessionPool
 }
 
-func NewSMPPHandler() (*SMPPHandler, error) {
-	config, err := LoadConfig()
-	if err != nil {
-		fmt.Println("Error loading config:", err)
-		return nil, err
-	}
-
-	pool, err := getSessionPool(3, config)
-	if err != nil {
-		return nil, err
-	}
-
+// NewSMPPHandler creates a new SMPPHandler
+func NewSMPPHandler(config Config, sessionPool ISessionPool) ISMPPHandler {
 	return &SMPPHandler{
 		config:      config,
-		sessionPool: pool,
-	}, nil
+		sessionPool: sessionPool,
+	}
 }
 
-func (h *SMPPHandler) SendAndReceiveSMS(ctx context.Context) {
+func (h *SMPPHandler) SendAndReceiveSMS(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
 	for i := 0; i < 1800; i++ {
 		msg := fmt.Sprintf("MSG %d", i)
-		if err := h.sessionPool.submitSMSToPool(msg); err != nil {
-			fmt.Println(err)
+		if err := h.sessionPool.SubmitSMSToPool(h, msg); err != nil {
+			fmt.Println("Error submitting SMS to pool:", err)
 		}
 
 		select {
@@ -48,17 +47,16 @@ func (h *SMPPHandler) SendAndReceiveSMS(ctx context.Context) {
 	}
 }
 
-func (h *SMPPHandler) newSubmitSM(msg string) *pdu.SubmitSM {
-	// build up submitSM
+func (h *SMPPHandler) NewSubmitSM(msg string) *pdu.SubmitSM {
 	srcAddr := pdu.NewAddress()
 	srcAddr.SetTon(5)
 	srcAddr.SetNpi(0)
-	_ = srcAddr.SetAddress("00" + "522241")
+	_ = srcAddr.SetAddress("00522241")
 
 	destAddr := pdu.NewAddress()
 	destAddr.SetTon(1)
 	destAddr.SetNpi(1)
-	_ = destAddr.SetAddress("99" + "522241")
+	_ = destAddr.SetAddress("99522241")
 
 	submitSM := pdu.NewSubmitSM().(*pdu.SubmitSM)
 	submitSM.SourceAddr = srcAddr
@@ -72,7 +70,6 @@ func (h *SMPPHandler) newSubmitSM(msg string) *pdu.SubmitSM {
 	return submitSM
 }
 
-// Close closes the handler and associated session pool.
 func (h *SMPPHandler) Close() {
 	h.sessionPool.Close()
 }
