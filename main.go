@@ -21,9 +21,7 @@ func main() {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-
 	quit := make(chan os.Signal, 1)
-
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	wg.Add(1)
@@ -35,10 +33,8 @@ func main() {
 
 	go func() {
 		<-quit
-		println("Shutting down...")
-
+		fmt.Println("Shutting down...")
 		handler.Close()
-
 		os.Exit(1)
 	}()
 
