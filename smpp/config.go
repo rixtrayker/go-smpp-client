@@ -41,14 +41,12 @@ func LoadConfig() (Config, error) {
 		return Config{}, fmt.Errorf("PASSWORD not found in environment variables")
 	}
 
-	config := Config{
+	return Config{
 		SMSCHost: smscHost,
 		SMSCPort: smscPort,
 		SystemID: systemID,
 		Password: password,
-	}
-
-	return config, nil
+	}, nil
 }
 
 func getEnvInt(key string) (int, error) {

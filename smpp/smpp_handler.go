@@ -10,13 +10,12 @@ import (
 )
 
 type SMPPHandler struct {
-	config     Config
+	config      Config
 	sessionPool *sessionPool
 }
 
 func NewSMPPHandler() (*SMPPHandler, error) {
 	config, err := LoadConfig()
-
 	if err != nil {
 		fmt.Println("Error loading config:", err)
 		return nil, err
@@ -28,30 +27,26 @@ func NewSMPPHandler() (*SMPPHandler, error) {
 	}
 
 	return &SMPPHandler{
-		config:     config,
+		config:      config,
 		sessionPool: pool,
 	}, nil
 }
 
-func (h *SMPPHandler) SendAndReceiveSMS(ctx context.Context, wg *sync.WaitGroup) {
-    defer wg.Done()
+func (h *SMPPHandler) SendAndReceiveSMS(ctx context.Context) {
+	for i := 0; i < 1800; i++ {
+		msg := fmt.Sprintf("MSG %d", i)
+		if err := h.sessionPool.submitSMSToPool(msg); err != nil {
+			fmt.Println(err)
+		}
 
-    for i := 0; i < 1800; {
-        select {
-        case <-ctx.Done():
-            fmt.Println("Context canceled, stopping SMS sending...")
-            return // Exit the loop on context cancellation
-        default:
-            msg := fmt.Sprintf("MSG %d", i)
-            if err := h.sessionPool.submitSMSToPool(msg); err != nil {
-                fmt.Println(err)
-            }
-            i++
-        }
-    }
+		select {
+		case <-ctx.Done():
+			fmt.Println("Context canceled, shutting down...")
+			return
+		default:
+		}
+	}
 }
-
-
 
 func (h *SMPPHandler) newSubmitSM(msg string) *pdu.SubmitSM {
 	// build up submitSM
@@ -77,17 +72,7 @@ func (h *SMPPHandler) newSubmitSM(msg string) *pdu.SubmitSM {
 	return submitSM
 }
 
-func isConcatenatedDone(parts []string, total byte) bool {
-	for _, part := range parts {
-		if part != "" {
-			total--
-		}
-	}
-	return total == 0
-}
-
-// func Close
-
+// Close closes the handler and associated session pool.
 func (h *SMPPHandler) Close() {
 	h.sessionPool.Close()
 }

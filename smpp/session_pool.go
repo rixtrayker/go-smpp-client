@@ -2,8 +2,6 @@ package smpp
 
 import (
 	"fmt"
-	"log"
-	"strings"
 	"sync"
 	"time"
 
@@ -11,17 +9,22 @@ import (
 	"github.com/linxGnu/gosmpp/pdu"
 )
 
+const maxOutstandingRequests = 100
+
 type sessionPool struct {
-	config   Config
-	sessions []*gosmpp.Session
-	mutex    sync.Mutex
+	config         Config
+	sessions       []*gosmpp.Session
+	mutex          sync.Mutex
+	submitRespCh   chan struct{}
+	waitBlockingCh chan struct{}
 }
 
 func getSessionPool(maxSessions int, config Config) (*sessionPool, error) {
 	pool := &sessionPool{
-		config:   config,
-		sessions: make([]*gosmpp.Session, 0, maxSessions),
-
+		config:         config,
+		sessions:       make([]*gosmpp.Session, 0, maxSessions),
+		submitRespCh:   make(chan struct{}, maxOutstandingRequests),
+		waitBlockingCh: make(chan struct{}),
 	}
 
 	for i := 0; i < maxSessions; i++ {
@@ -56,16 +59,33 @@ func (p *sessionPool) returnSession(session *gosmpp.Session) {
 }
 
 func (p *sessionPool) submitSMSToPool(msg string) error {
-	session := p.getSession()
-	if session == nil {
+	p.mutex.Lock()
+	if len(p.sessions) == 0 {
+		p.mutex.Unlock()
 		return fmt.Errorf("no available sessions in the pool")
 	}
-	defer p.returnSession(session)
+
+	session := p.sessions[0]
+	p.sessions = p.sessions[1:]
+	p.mutex.Unlock()
+
+	defer func() {
+		p.returnSession(session)
+	}()
 
 	handler, _ := NewSMPPHandler()
-	if err := session.Transceiver().Submit(handler.newSubmitSM(msg)); err != nil {
+	submitSM := handler.newSubmitSM(msg)
+
+	if len(p.submitRespCh) == maxOutstandingRequests {
+		<-p.waitBlockingCh
+		time.Sleep(1 * time.Second)
+	}
+
+	if err := session.Transceiver().Submit(submitSM); err != nil {
 		return err
 	}
+
+	p.submitRespCh <- struct{}{}
 
 	return nil
 }
@@ -82,23 +102,17 @@ func (p *sessionPool) createSession() (*gosmpp.Session, error) {
 		gosmpp.TRXConnector(gosmpp.NonTLSDialer, auth),
 		gosmpp.Settings{
 			EnquireLink: 2000 * time.Millisecond,
-
 			ReadTimeout: 10 * time.Second,
-
 			OnSubmitError: func(_ pdu.PDU, err error) {
 				fmt.Println("SubmitPDU error:", err)
 			},
-
 			OnReceivingError: func(err error) {
 				fmt.Println("Receiving PDU/Network error:", err)
 			},
-
 			OnRebindingError: func(err error) {
 				fmt.Println("Rebinding but error:", err)
 			},
-
 			OnPDU: p.handlePDU(),
-
 			OnClosed: func(state gosmpp.State) {
 				fmt.Print("Closed connection, state: ")
 				fmt.Println(state)
@@ -111,53 +125,29 @@ func (p *sessionPool) createSession() (*gosmpp.Session, error) {
 	return trans, nil
 }
 
-
 func (p *sessionPool) handlePDU() func(pdu.PDU, bool) {
-	concatenated := map[uint8][]string{}
-	return func(p pdu.PDU, _ bool) {
-		switch pd := p.(type) {
+	return func(pd pdu.PDU, _ bool) {
+		switch pd.(type) {
 		case *pdu.SubmitSMResp:
-			fmt.Printf("SubmitSMResp:")
-
+			fmt.Printf("SubmitSMResp received\n")
+			<-p.submitRespCh
 		case *pdu.GenericNack:
 			fmt.Println("GenericNack Received")
-
 		case *pdu.EnquireLinkResp:
 			fmt.Println("EnquireLinkResp Received")
-
 		case *pdu.DataSM:
-			fmt.Printf("DataSM:")
-
+			fmt.Printf("DataSM received\n")
 		case *pdu.DeliverSM:
-			fmt.Printf("DeliverSM:")
-			// log.Println(pd.Message.GetMessage())
-			// region concatenated sms (sample code)
-			message, err := pd.Message.GetMessage()
-			if err != nil {
-				log.Fatal(err)
-			}
-			totalParts, sequence, reference, found := pd.Message.UDH().GetConcatInfo()
-			if found {
-				if _, ok := concatenated[reference]; !ok {
-					concatenated[reference] = make([]string, totalParts)
-				}
-				concatenated[reference][sequence-1] = message
-			}
-			if !found {
-				log.Println(message)
-			} else if parts, ok := concatenated[reference]; ok && isConcatenatedDone(parts, totalParts) {
-				fmt.Println(strings.Join(parts, ""))
-				// print byte reference
-				// fmt.Println("reference: %s", string(reference))
-				delete(concatenated, reference)
-			}
-			// endregion
+			fmt.Printf("DeliverSM received\n")
+			// Extract message content from pdu.Message if needed
 		}
 	}
 }
 
-// func Close
+// Close closes all sessions in the pool.
 func (p *sessionPool) Close() {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	for _, session := range p.sessions {
 		session.Close()
 	}

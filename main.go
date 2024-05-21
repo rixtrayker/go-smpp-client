@@ -19,6 +19,7 @@ func main() {
 		fmt.Println("Error creating SMPP handler:", err)
 		return
 	}
+	defer handler.Close()  // Ensure resources are cleaned up
 
 	ctx, cancel := context.WithCancel(context.Background())
 	quit := make(chan os.Signal, 1)
@@ -27,15 +28,13 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		defer cancel()
-		handler.SendAndReceiveSMS(ctx, &wg)
+		handler.SendAndReceiveSMS(ctx)
 	}()
 
 	go func() {
 		<-quit
 		fmt.Println("Shutting down...")
-		handler.Close()
-		os.Exit(1)
+		cancel()
 	}()
 
 	wg.Wait()
